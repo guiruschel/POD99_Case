@@ -1,0 +1,72 @@
+%% Arquitetura — Nova Plataforma de Finanças (Cálculo de Saldo por Contrato)
+%% Cenário A — Medallion (Bronze/Silver/Gold) sobre S3 + Apache Iceberg V3, AWS Glue/PySpark
+flowchart TD
+
+    subgraph SRC["Origem"]
+        SOURCE["Sistemas contábeis / lançamentos\n(Parquet particionado por dt_processamento)"]
+    end
+
+    subgraph ORCH["Orquestração"]
+        EB["EventBridge\n(schedule diário / evento de chegada no S3)"]
+        SF["Step Functions\nbronze -> silver -> gold"]
+        EB --> SF
+    end
+
+    subgraph LAKE["S3 Data Lake — Apache Iceberg V3"]
+        direction TB
+        RAW["Raw\ns3://.../raw/"]
+        BRONZE["Bronze\nfin_contabilidade_saldo_contrato\n(schema validado, quarentena de DQ)"]
+        SILVER["Silver\ntransações deduplicadas,\njoin com domínio COSIF,\nMERGE idempotente por id_transacao/id_lote"]
+        GOLD["Gold\nsaldo_por_contrato\nsaldo_por_conta\nclassificacao_cosif\nreconciliacao_debito_credito"]
+        RAW --> BRONZE --> SILVER --> GOLD
+    end
+
+    subgraph GLUE["Processamento — AWS Glue (PySpark)"]
+        J1["Job Bronze\ningest + data contract validation"]
+        J2["Job Silver\ndedup + enrich + merge idempotente"]
+        J3["Job Gold\nagregações contábeis"]
+    end
+
+    subgraph GOV["Catálogo e Governança"]
+        CATALOG["Glue Data Catalog"]
+        LF["Lake Formation\npermissões sobre o catálogo"]
+        CONTRACT["Data Contract as code\n(data_contracts/*.yaml)"]
+    end
+
+    subgraph CTRL["Controle de Idempotência"]
+        DDB[("DynamoDB\ncontrole de lote\nRECEIVED/PROCESSING/PROCESSED/FAILED")]
+    end
+
+    subgraph OBS["Observabilidade"]
+        CW["CloudWatch\nlogs estruturados + métricas + alarmes"]
+    end
+
+    subgraph CONS["Consumo"]
+        ATHENA["Athena\nconsultas ad-hoc sobre Gold"]
+    end
+
+    subgraph IAC["Infraestrutura como Código"]
+        TF["Terraform\nS3, IAM, Glue, Step Functions,\nEventBridge, DynamoDB, alarmes"]
+    end
+
+    SOURCE --> RAW
+    SF --> J1 --> BRONZE
+    SF --> J2 --> SILVER
+    SF --> J3 --> GOLD
+
+    J1 -. valida contra .-> CONTRACT
+    J1 --> DDB
+    J2 --> DDB
+    J3 --> DDB
+
+    J1 & J2 & J3 --> CW
+    BRONZE & SILVER & GOLD --> CATALOG
+    CATALOG --> LF
+
+    GOLD --> ATHENA
+
+    TF -.provisiona.-> ORCH
+    TF -.provisiona.-> GLUE
+    TF -.provisiona.-> GOV
+    TF -.provisiona.-> CTRL
+    TF -.provisiona.-> OBS

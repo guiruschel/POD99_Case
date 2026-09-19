@@ -1,0 +1,23 @@
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Generated data (large, reproducible via the generator script)
+data_generator/output/
+
+# Secrets
+.env
+*.pem
+
+

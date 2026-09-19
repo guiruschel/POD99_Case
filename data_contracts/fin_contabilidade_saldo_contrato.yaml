@@ -1,0 +1,93 @@
+# Data contract for the "fin_contabilidade_saldo_contrato" dataset.
+# Source of truth for schema + quality rules, consumed by:
+#   - the synthetic data generator (data_generator/)
+#   - the Bronze job's contract validation step (jobs/bronze_ingest.py)
+# This mirrors the contract defined in docs/desafio-tecnico-pod99-arquiteto-de-dados.md.
+
+dataset: fin_contabilidade_saldo_contrato
+domain: Financeiro / Contabilidade
+owner: Squad Contábil — VP Finanças
+sla: "D+1 06:00 BRT"
+classification: "Confidencial — Dados regulatórios"
+source_format: parquet
+partition_column: dt_processamento
+
+schema:
+  - name: id_transacao
+    type: string
+    nullable: false
+    description: Unique transaction identifier (UUID)
+  - name: id_contrato
+    type: string
+    nullable: false
+    description: Customer contract identifier
+  - name: id_conta
+    type: string
+    nullable: false
+    description: Checking account number
+  - name: cod_agencia
+    type: string
+    nullable: false
+    description: Branch code
+  - name: tipo_contrato
+    type: string
+    nullable: false
+    description: One of CC, POUP, CDB, LCI, CONSORCIO, SEGURO
+    allowed_values: [CC, POUP, CDB, LCI, CONSORCIO, SEGURO]
+  - name: tipo_lancamento
+    type: string
+    nullable: false
+    description: One of DEBITO, CREDITO, TARIFA, JUROS, IOF
+    allowed_values: [DEBITO, CREDITO, TARIFA, JUROS, IOF]
+  - name: valor_lancamento
+    type: decimal(18,2)
+    nullable: false
+    description: Monetary value of the entry, in BRL
+  - name: dt_lancamento
+    type: timestamp
+    nullable: false
+    description: Accounting entry date/time
+  - name: dt_processamento
+    type: date
+    nullable: false
+    description: Processing date (partition column)
+  - name: cod_cosif
+    type: string
+    nullable: true
+    description: COSIF accounting classification code (references cosif_domain)
+  - name: flag_estorno
+    type: boolean
+    nullable: false
+    description: Whether this entry is a reversal (estorno)
+  - name: id_lote
+    type: string
+    nullable: false
+    description: Processing batch identifier
+
+quality_rules:
+  - id: uniqueness_id_transacao
+    description: id_transacao must be globally unique
+    rule: "unique(id_transacao)"
+  - id: valor_lancamento_positive_unless_estorno
+    description: valor_lancamento must be > 0; reversals use flag_estorno = true instead of negative values
+    rule: "valor_lancamento > 0"
+  - id: dt_lancamento_not_after_dt_processamento
+    description: An entry cannot be dated after the processing date that carries it
+    rule: "dt_lancamento <= dt_processamento"
+  - id: cod_cosif_referential_integrity
+    description: When present, cod_cosif must exist in the cosif_domain reference table
+    rule: "cod_cosif IS NULL OR cod_cosif IN cosif_domain.cod_cosif"
+  - id: completeness_not_null_fields
+    description: Fields marked nullable=false must not be null or empty string
+    rule: "NOT NULL fields are populated"
+
+schema_evolution_policy: >
+  Additive changes only (new nullable columns) are allowed without a version bump,
+  leveraging Apache Iceberg's native schema evolution (add/rename column without
+  rewriting existing data files). Breaking changes (type changes, removing a
+  column, making a nullable column required) require a new contract version and
+  a migration plan agreed with the Squad Contábil owner.
+
+reference_tables:
+  - name: cosif_domain
+    description: COSIF classification code domain table (cod_cosif -> descricao, tipo_contrato esperado)
