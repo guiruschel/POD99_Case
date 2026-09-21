@@ -137,6 +137,10 @@ def inject_dq_violations(df: pd.DataFrame, error_rate: float, seed: int) -> pd.D
 
 def write_partitioned_parquet(df: pd.DataFrame, output_dir: Path) -> None:
     raw_dir = output_dir / "raw"
+    # pandas/pyarrow default to nanosecond-precision timestamps, which Spark's
+    # Parquet reader rejects ("Illegal Parquet type: INT64 (TIMESTAMP(NANOS))").
+    # Microsecond precision matches what Spark/Iceberg actually support.
+    df = df.astype({"dt_lancamento": "datetime64[us]"})
     for dt_processamento, partition_df in df.groupby("dt_processamento"):
         partition_dir = raw_dir / f"dt_processamento={dt_processamento}"
         partition_dir.mkdir(parents=True, exist_ok=True)

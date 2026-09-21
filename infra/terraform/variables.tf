@@ -21,3 +21,8 @@ variable "aws_profile" {
   type        = string
   default     = ""
 }
+
+variable "budget_alert_email" {
+  description = "Email that receives the AWS Budgets cost alert. No default on purpose — pass explicitly via -var or TF_VAR_budget_alert_email."
+  type        = string
+}

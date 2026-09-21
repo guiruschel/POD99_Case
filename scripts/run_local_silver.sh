@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
-# Runs the Bronze job inside the official AWS Glue Docker image, against a
+# Runs the Silver job inside the official AWS Glue Docker image, against the
 # local Iceberg (hadoop-type) catalog on disk -- no AWS calls, no AWS cost.
+# Usage: scripts/run_local_silver.sh <dt_processamento, e.g. 2026-08-01>
 set -euo pipefail
+
+PROCESSING_DATE="${1:?Usage: run_local_silver.sh <dt_processamento>}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="amazon/aws-glue-libs:5.1.0"
 WORKSPACE="/home/hadoop/workspace"
 WAREHOUSE_PATH="$WORKSPACE/data_generator/output/warehouse"
 
-# On Windows/git-bash (MSYS), the shell rewrites POSIX-looking paths into
-# Windows paths before Docker ever sees them. Disabling that is required here.
 export MSYS_NO_PATHCONV=1
 
-# This image's ENTRYPOINT is already "bash -l", so args are passed straight
-# to bash (as -c "..."), not wrapped in another bash -c. Container user is
-# "hadoop", not "glue_user" (that was true for older Glue 4.0 images only).
 docker run --rm \
   -v "$REPO_ROOT":"$WORKSPACE"/ \
   -w "$WORKSPACE" \
@@ -25,13 +23,11 @@ docker run --rm \
       --conf spark.sql.catalog.local_iceberg=org.apache.iceberg.spark.SparkCatalog \
       --conf spark.sql.catalog.local_iceberg.type=hadoop \
       --conf spark.sql.catalog.local_iceberg.warehouse=$WAREHOUSE_PATH \
-      jobs/bronze_ingest.py \
-      --JOB_NAME bronze_ingest_local \
-      --raw_path $WORKSPACE/data_generator/output/raw \
+      jobs/silver_transform.py \
+      --JOB_NAME silver_transform_local \
       --ref_path $WORKSPACE/data_generator/output/ref/cosif_domain.parquet \
-      --quarantine_path $WORKSPACE/data_generator/output/quarantine \
+      --processing_date $PROCESSING_DATE \
       --catalog_name local_iceberg \
       --catalog_database pod99_fin_case_dev \
-      --contract_path $WORKSPACE/data_contracts/fin_contabilidade_saldo_contrato.yaml \
-      --table_location $WAREHOUSE_PATH/pod99_fin_case_dev/bronze_fin_contabilidade_saldo_contrato
+      --table_location $WAREHOUSE_PATH/pod99_fin_case_dev/silver_fin_contabilidade_saldo_contrato
   "

@@ -41,10 +41,65 @@ data "aws_iam_policy_document" "data_lake_access" {
 }
 
 # Scoped to this project's bucket only (least privilege). Extended in later
-# days with Glue Catalog table permissions, DynamoDB access and CloudWatch
-# custom metrics, as those resources are added.
+# days with DynamoDB access and CloudWatch custom metrics, as those resources
+# are added.
 resource "aws_iam_role_policy" "data_lake_access" {
   name   = "${var.project_name}-${var.environment}-data-lake-access"
   role   = aws_iam_role.glue_job.id
   policy = data.aws_iam_policy_document.data_lake_access.json
+}
+
+# Added when the Bronze job started writing Iceberg tables to the real Glue
+# Data Catalog (previously only tested against a local hadoop-type catalog).
+# Scoped to this project's database only, not catalog-wide.
+data "aws_iam_policy_document" "glue_catalog_access" {
+  statement {
+    sid = "GlueCatalogReadWrite"
+
+    actions = [
+      "glue:GetDatabase",
+      "glue:GetDatabases",
+      "glue:GetTable",
+      "glue:GetTables",
+      "glue:CreateTable",
+      "glue:UpdateTable",
+      "glue:GetPartitions",
+      "glue:BatchCreatePartition",
+    ]
+
+    resources = [
+      var.glue_catalog_arn,
+      var.glue_database_arn,
+      var.glue_tables_arn,
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "glue_catalog_access" {
+  name   = "${var.project_name}-${var.environment}-glue-catalog-access"
+  role   = aws_iam_role.glue_job.id
+  policy = data.aws_iam_policy_document.glue_catalog_access.json
+}
+
+# Batch control table: jobs read/write their own status rows (RECEIVED /
+# PROCESSING / PROCESSED / FAILED), scoped to this single table only.
+data "aws_iam_policy_document" "batch_control_access" {
+  statement {
+    sid = "BatchControlReadWrite"
+
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:Query",
+    ]
+
+    resources = [var.batch_control_table_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "batch_control_access" {
+  name   = "${var.project_name}-${var.environment}-batch-control-access"
+  role   = aws_iam_role.glue_job.id
+  policy = data.aws_iam_policy_document.batch_control_access.json
 }

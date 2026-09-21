@@ -7,9 +7,16 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="amazon/aws-glue-libs:5.1.0"
 
+# On Windows/git-bash (MSYS), the shell rewrites POSIX-looking paths (like the
+# container-side /home/glue_user/workspace) into Windows paths before Docker
+# ever sees them. Disabling that rewriting is required here.
+export MSYS_NO_PATHCONV=1
+
+# This image's ENTRYPOINT is already "bash -l", so args are passed straight
+# to bash (as -c "..."), not wrapped in another bash -c. Container user is
+# "hadoop", not "glue_user" (that was true for older Glue 4.0 images only).
 docker run --rm \
-  -v "$REPO_ROOT":/home/glue_user/workspace/ \
-  -e DISABLE_SSL=true \
-  -w /home/glue_user/workspace \
+  -v "$REPO_ROOT":/home/hadoop/workspace/ \
+  -w /home/hadoop/workspace \
   "$IMAGE" \
-  bash -c "pip install -q -r requirements-dev.txt && python3 -m pytest tests/ -v"
+  -c "pip install -q --user -r requirements-dev.txt && python3 -m pytest tests/ -v"
