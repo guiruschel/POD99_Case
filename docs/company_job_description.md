@@ -1,5 +1,3 @@
-tenho um case para a vaga abaixo:
-
 Engenheiro(a) de Dados – Projeto Futuro de Finanças
 
 
@@ -51,6 +49,3 @@ Observabilidade: Uso de CloudWatch, DataDog ou ferramentas similares.
 IA / GenAI aplicada a dados: Experiência com Amazon Bedrock, MCP Server AI Agent, prompt engineering, RAG, embeddings, guardrails e avaliação.
 
 Spec Driven Development: Conhecimento e aplicação de desenvolvimento guiado por especificação.
-
-
-em anexo o md. Me resuma oq tem que fazer ,principais pontos e dê sugestões já de como fazer. Um cenário pra entregar muito bem e outro pra impressionar/proativo 

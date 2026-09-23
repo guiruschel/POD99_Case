@@ -103,3 +103,20 @@ resource "aws_iam_role_policy" "batch_control_access" {
   role   = aws_iam_role.glue_job.id
   policy = data.aws_iam_policy_document.batch_control_access.json
 }
+
+# cloudwatch:PutMetricData does not support resource-level scoping (it's
+# always "*" in AWS IAM -- there's no ARN format for a CloudWatch metric),
+# so this is as tight as this permission can get.
+data "aws_iam_policy_document" "custom_metrics_access" {
+  statement {
+    sid       = "PublishCustomMetrics"
+    actions   = ["cloudwatch:PutMetricData"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "custom_metrics_access" {
+  name   = "${var.project_name}-${var.environment}-custom-metrics-access"
+  role   = aws_iam_role.glue_job.id
+  policy = data.aws_iam_policy_document.custom_metrics_access.json
+}

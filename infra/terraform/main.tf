@@ -54,6 +54,31 @@ module "glue_jobs" {
   batch_control_table   = module.dynamodb.table_name
 }
 
+module "orchestration" {
+  source = "./modules/orchestration"
+
+  project_name    = var.project_name
+  environment     = var.environment
+  bronze_job_name = module.glue_jobs.bronze_job_name
+  silver_job_name = module.glue_jobs.silver_job_name
+  gold_job_name   = module.glue_jobs.gold_job_name
+  bronze_job_arn  = local.bronze_job_arn
+  silver_job_arn  = local.silver_job_arn
+  gold_job_arn    = local.gold_job_arn
+}
+
+module "monitoring" {
+  source = "./modules/monitoring"
+
+  project_name      = var.project_name
+  environment       = var.environment
+  alert_email       = var.budget_alert_email
+  bronze_job_name   = module.glue_jobs.bronze_job_name
+  silver_job_name   = module.glue_jobs.silver_job_name
+  gold_job_name     = module.glue_jobs.gold_job_name
+  state_machine_arn = module.orchestration.state_machine_arn
+}
+
 module "budget" {
   source = "./modules/budget"
 

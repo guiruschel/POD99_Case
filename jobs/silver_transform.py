@@ -1,5 +1,6 @@
 """Silver job: dedup Bronze transactions, enrich with COSIF domain, upsert idempotently into Iceberg."""
 import sys
+import time
 
 from awsglue.context import GlueContext
 from awsglue.job import Job
@@ -9,6 +10,7 @@ from pyspark.sql import functions as F
 
 from common.batch_control import update_batch_status
 from common.logging_utils import get_logger, log_event
+from common.metrics import put_metric
 from common.silver_transform import dedup_and_enrich
 
 JOB_ARGS = [
@@ -36,6 +38,7 @@ def run_silver_transform(spark, args: dict, logger) -> None:
     bronze_count = bronze_df.count()
     silver_count = silver_df.count()
     log_event(logger, "transform_complete", bronze_rows=bronze_count, silver_rows=silver_count)
+    put_metric("records_processed", silver_count, "silver", logger=logger)
 
     silver_df.createOrReplaceTempView("silver_source")
 
@@ -82,10 +85,12 @@ def main() -> None:
     job = Job(glue_context)
     job.init(args["JOB_NAME"], args)
 
+    started_at = time.time()
     try:
         update_batch_status(id_lote, "silver", "PROCESSING", logger)
         run_silver_transform(spark, args, logger)
         update_batch_status(id_lote, "silver", "PROCESSED", logger)
+        put_metric("job_duration_seconds", time.time() - started_at, "silver", unit="Seconds", logger=logger)
         job.commit()
     except Exception as e:
         update_batch_status(id_lote, "silver", "FAILED", logger, error_message=str(e)[:500])

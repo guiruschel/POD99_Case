@@ -21,3 +21,8 @@ variable "glue_database_name" {
 variable "batch_control_table" {
   type = string
 }
+
+variable "cloudwatch_namespace" {
+  type    = string
+  default = "Pod99FinCase"
+}

@@ -1,5 +1,6 @@
 """Gold job: saldo por contrato/conta, classificacao COSIF, reconciliacao debito/credito por agencia."""
 import sys
+import time
 
 from awsglue.context import GlueContext
 from awsglue.job import Job
@@ -16,6 +17,7 @@ from common.gold_transform import (
     saldo_por_contrato,
 )
 from common.logging_utils import get_logger, log_event
+from common.metrics import put_metric
 
 JOB_ARGS = [
     "JOB_NAME",
@@ -76,6 +78,7 @@ def run_gold_aggregate(spark, args: dict, logger) -> None:
         classificacoes_cosif=cosif_df.count(),
         agencias=reconciliacao_df.count(),
     )
+    put_metric("records_processed", silver_df.count(), "gold", logger=logger)
 
     results = {
         "gold_saldo_contrato": contrato_df,
@@ -107,10 +110,12 @@ def main() -> None:
     job = Job(glue_context)
     job.init(args["JOB_NAME"], args)
 
+    started_at = time.time()
     try:
         update_batch_status(id_lote, "gold", "PROCESSING", logger)
         run_gold_aggregate(spark, args, logger)
         update_batch_status(id_lote, "gold", "PROCESSED", logger)
+        put_metric("job_duration_seconds", time.time() - started_at, "gold", unit="Seconds", logger=logger)
         job.commit()
     except Exception as e:
         update_batch_status(id_lote, "gold", "FAILED", logger, error_message=str(e)[:500])

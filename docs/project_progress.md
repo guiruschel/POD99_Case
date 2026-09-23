@@ -5,8 +5,22 @@
 
 ## STEP atual
 
-**Dia 4 do plano (job Gold) — COMPLETO.** Pipeline Bronze → Silver → Gold rodando de verdade na AWS, ponta a ponta, validado via Athena.
-Próximo: Step Functions + EventBridge (orquestração) e CloudWatch (observabilidade) — fecham o Dia 4.
+**Dia 5 do plano — COMPLETO, incluindo os ajustes pós-mudança de escopo.** Case finalizado: 4 ADRs adicionais (006-009), seção de dimensionamento para produção, README consolidado na raiz, `APRESENTACAO.md` (documento guia substituindo a defesa técnica — ver mudança de planejamento abaixo), `docs/evidencias/` com 14 prints reais do console AWS embutidos e legendados, ZIP de entrega regenerado (94 arquivos, `POD99_Case_delivery.zip`, 1,85 MB).
+**Pendente: decisão do usuário sobre o commit git** (nunca foi feito nesta sessão — só existe o commit inicial "Project").
+
+## Última implementação validada (Dia 4, CloudWatch)
+
+`jobs/common/metrics.py` (`put_metric()`, opcional como o `batch_control.py`) publica `records_processed`/`records_rejected_dq`/`job_duration_seconds` nos 3 jobs. Módulo Terraform `monitoring`: tópico SNS + regra EventBridge em cima de "Glue Job State Change" (falha de job individual) + alarme CloudWatch na métrica nativa `AWS/States ExecutionsFailed` (falha da execução do pipeline inteiro) — nenhum dos dois caminhos precisou de instrumentação customizada além do `PutMetricData` nos jobs.
+
+Validado: `pytest` 27/27, `terraform apply` real (7 recursos novos, 7 atualizados), execução real via Step Functions com `--cloudwatch_namespace` habilitado, **métricas reais confirmadas via `aws cloudwatch list-metrics`/`get-metric-statistics`** (`records_processed=4873` no Bronze, batendo com o dado real), e alarme confirmado em estado `OK` após execução bem-sucedida. Detalhes: `docs/test_log.md` §4.16–4.19.
+
+**Nota operacional:** a inscrição de e-mail do SNS (`gui.ruschel22@gmail.com`) fica `PendingConfirmation` até clicar no link que a AWS envia — sem isso, alertas reais não chegam.
+
+## Última implementação validada (Dia 4, orquestração)
+
+Módulo Terraform `orchestration`: Step Functions (`pod99-fin-case-dev-pipeline`, 3 estados Bronze→Silver→Gold via `glue:startJobRun.sync`) + regra EventBridge de disparo diário (`DISABLED` de propósito — decisão documentada, ver tabela de decisões).
+
+**Achado real na primeira execução**: o pipeline falhou com `States.Runtime` porque o output do `RunBronze` sobrescreveu o `$.processing_date` do input original (comportamento padrão do Step Functions: output de uma Task substitui o input do próximo estado). Corrigido com `ResultPath = null` em `RunBronze`/`RunSilver`. Reexecutado: **SUCCEEDED ponta a ponta**, Bronze+Silver+Gold em sequência sem intervenção manual, validado via Athena com os mesmos números de todas as execuções manuais anteriores (bronze 4873/4873, silver 4873/4873, gold_contrato 1044/1044). Detalhes: `docs/test_log.md` §4.12–4.15.
 
 ## Última implementação validada (Dia 4, job Gold)
 
@@ -15,6 +29,8 @@ Próximo: Step Functions + EventBridge (orquestração) e CloudWatch (observabil
 Escrita idempotente via **overwrite dinâmico de partição do Iceberg** (`.writeTo(table).overwritePartitions()`), diferente do `MERGE INTO` do Silver — são agregações, não upserts por chave, então reprocessar o dia troca a partição inteira.
 
 Validado: `pytest` 25/25 (7 novos testes do Gold), 3 execuções locais via Docker (cria as 4 tabelas, reprocessa o mesmo dia confirmando `addedRecords=removedRecords=50` no commit do Iceberg, processa um segundo dia confirmando acumulação correta por partição), `terraform apply` real (job `pod99-fin-case-dev-gold-aggregate`), **execução real na AWS SUCCEEDED na primeira tentativa**, batch control confirmado (`status=PROCESSED`), e **consulta real via Athena nas 4 tabelas Gold** retornando os mesmos totais do teste local (1044/300/16/50). Detalhes: `docs/test_log.md` (Dia 4).
+
+**Achado e corrigido no mesmo ciclo:** reexecutar o Bronze na AWS (pra testar o batch control) duplicou a tabela inteira (`total=9746` para `4873` distintos) — o job lê `raw/` inteiro a cada run (não incremental) e usava `.append()`. Corrigido para `.overwritePartitions()` (mesma técnica do Gold), revalidado local (2 execuções seguidas, sem duplicar) e na AWS real (2 execuções reais, `total=distintos=4873` nas duas). Confirmado que Silver e Gold não foram afetados (MERGE INTO do Silver já deduplicava por `id_transacao`). Detalhes: `docs/test_log.md` §4.8–4.11.
 
 ## Última implementação validada (Dia 3, DynamoDB)
 
@@ -105,13 +121,13 @@ Detalhes completos de cada comando/resultado: `docs/test_log.md`.
 - [x] ~~Tabela DynamoDB de controle de lote (idempotência/status de processamento)~~ — feito, módulo `dynamodb`, `jobs/common/batch_control.py`, validado via `pytest` (18/18) e execuções reais na AWS (Bronze e Silver gravando `status=PROCESSED` de verdade, confirmado via `aws dynamodb get-item`).
 - [x] ~~Job Gold (`jobs/gold_aggregate.py`)~~ — feito, validado local (25/25 testes) **e na AWS real** (SUCCEEDED na 1ª tentativa, validado via Athena: 1044/300/16/50, idêntico ao local).
 - [x] ~~Módulo Terraform `glue_jobs` — job Gold~~ — feito, `pod99-fin-case-dev-gold-aggregate` criado e confirmado na AWS.
-- [ ] Módulo Terraform para Step Functions + EventBridge (orquestração).
-- [ ] Módulo Terraform para CloudWatch (logs estruturados, métricas, alarmes).
+- [x] ~~Módulo Terraform para Step Functions + EventBridge (orquestração)~~ — feito, `pod99-fin-case-dev-pipeline` criado (Bronze → Silver → Gold via `glue:startJobRun.sync`); regra EventBridge de disparo diário criada `DISABLED` de propósito (decisão de custo/escopo, ver tabela de decisões).
+- [x] ~~Módulo Terraform para CloudWatch (logs estruturados, métricas, alarmes)~~ — feito: `jobs/common/metrics.py` (métricas customizadas: `records_processed`, `records_rejected_dq`, `job_duration_seconds`) + módulo `monitoring` (SNS + alarme de falha do Step Functions + regra EventBridge de falha de job Glue). Validado via `pytest` (27/27) e execução real na AWS — métricas confirmadas via `aws cloudwatch list-metrics`/`get-metric-statistics`, alarme em estado `OK`.
 - [ ] Testes unitários do Gold.
-- [ ] ADRs adicionais: Iceberg vs Delta/Hudi, Step Functions vs Airflow/MWAA, estratégia de particionamento/idempotência.
-- [ ] Seção de dimensionamento para produção (custo/tempo estimado no volume real: 80M contas, 300M transações/dia).
-- [ ] README final consolidando tudo.
-- [ ] Empacotamento ZIP para entrega.
+- [x] ~~ADRs adicionais: Iceberg vs Delta/Hudi, Step Functions vs Airflow/MWAA, estratégia de particionamento/idempotência~~ — feito (006, 007, 008). Também adicionado ADR-009 (Lake Formation não habilitado — gap descoberto na finalização).
+- [x] ~~Seção de dimensionamento para produção~~ — feito, no `README.md` (volume, compute, custo estimado — premissas explícitas, não benchmark medido).
+- [x] ~~README final consolidando tudo~~ — feito, `README.md` na raiz.
+- [x] ~~Empacotamento ZIP para entrega~~ — feito, `POD99_Case_delivery.zip` (77 arquivos, 0,09 MB), gerado via staging + `Compress-Archive`, conteúdo verificado por extração.
 
 ## Decisões técnicas/arquiteturais
 
@@ -141,6 +157,12 @@ Detalhes completos de cada comando/resultado: `docs/test_log.md`.
 | `update_batch_status()` é opcional (no-op sem `--batch_control_table`) | Evita quebrar os runs locais via Docker (que não têm esse argumento nem credenciais AWS) — testado explicitamente em `test_batch_control.py` |
 | Convenção de sinal contábil no Gold (CREDITO/JUROS somam, DEBITO/TARIFA/IOF subtraem, estorno inverte) | Desafio não especifica a regra exata — decisão de negócio assumida e documentada em `jobs/common/gold_transform.py`, a validar com o Squad Contábil (owner do contrato) numa rodada real |
 | Gold escreve com `overwritePartitions()` (overwrite dinâmico de partição do Iceberg), não `MERGE INTO` | São agregações recalculadas do zero a cada run, não upserts linha a linha por chave — trocar a partição inteira é mais simples e correto que comparar/mesclar campo a campo |
+| Bronze também passou a usar `overwritePartitions()` (era `.append()`) | Achado real: reexecutar o Bronze sem dado novo duplicava a tabela inteira, porque ele lê `raw/` inteiro a cada run (não é incremental por arquivo). Ver `docs/test_log.md` §4.8 |
+| Step Functions usa `glue:startJobRun.sync` (integração nativa), não Lambda de polling | AWS gerencia o polling de conclusão do job Glue nativamente — menos código, menos pontos de falha |
+| Regra EventBridge do disparo diário criada com `state = "DISABLED"` | Calcular "ontem" dinamicamente exigiria uma Lambda pequena ou EventBridge Scheduler com expressão de data — fora do escopo do case; deixar a regra `ENABLED` faria ela disparar sem supervisão pelo resto da vida do projeto, incorrendo custo. Documentado, não escondido — uma versão de produção habilitaria com uma etapa real de cálculo de data na frente |
+| `ResultPath = null` em `RunBronze`/`RunSilver` no Step Functions | Achado real: sem isso, o output da task Glue sobrescreve o `$` do estado seguinte, apagando o `processing_date` do input original da execução (`States.Runtime` na 1ª tentativa real). Ver `docs/test_log.md` §4.13 |
+| Alarme de falha do pipeline na métrica nativa `AWS/States ExecutionsFailed`, não em métricas customizadas dos jobs | O Step Functions já publica essa métrica automaticamente por máquina de estados — cobre falha de qualquer etapa (Bronze/Silver/Gold) com um único alarme, sem duplicar lógica por job |
+| `cloudwatch:PutMetricData` com `resources = ["*"]` na policy IAM | Essa action não tem formato de ARN — não é possível escopar por namespace/métrica. É o least-privilege máximo possível para essa permissão específica |
 
 ## Arquivos importantes
 
@@ -152,10 +174,10 @@ Detalhes completos de cada comando/resultado: `docs/test_log.md`.
 - `architecture/ADRs/` — decisões arquiteturais registradas (001-região, 002-IAM deployer, 003-PySpark vs Scala, 004-dev local via Docker, 005-Iceberg format-version 2).
 - `data_contracts/fin_contabilidade_saldo_contrato.yaml` — contrato de dados.
 - `data_generator/generate_synthetic_transactions.py` — gerador de dados sintéticos.
-- `jobs/bronze_ingest.py`, `jobs/silver_transform.py`, `jobs/gold_aggregate.py`, `jobs/common/{contract,dq_validation,silver_transform,gold_transform,logging_utils,batch_control}.py` — jobs Bronze/Silver/Gold e utilitários.
-- `tests/unit/test_dq_validation.py`, `tests/unit/test_contract.py`, `tests/unit/test_silver_transform.py`, `tests/unit/test_gold_transform.py`, `tests/unit/test_batch_control.py` + `conftest.py` — testes unitários (DQ, contrato local/S3, dedup/enrich do Silver, agregações do Gold, controle de lote).
+- `jobs/bronze_ingest.py`, `jobs/silver_transform.py`, `jobs/gold_aggregate.py`, `jobs/common/{contract,dq_validation,silver_transform,gold_transform,logging_utils,batch_control,metrics}.py` — jobs Bronze/Silver/Gold e utilitários.
+- `tests/unit/test_dq_validation.py`, `tests/unit/test_contract.py`, `tests/unit/test_silver_transform.py`, `tests/unit/test_gold_transform.py`, `tests/unit/test_batch_control.py`, `tests/unit/test_metrics.py` + `conftest.py` — testes unitários (DQ, contrato local/S3, dedup/enrich do Silver, agregações do Gold, controle de lote, métricas).
 - `scripts/run_local_bronze.sh`, `scripts/run_local_silver.sh`, `scripts/run_local_gold.sh`, `scripts/run_tests_docker.sh` — execução local via Docker.
-- `infra/terraform/` — IaC (root + módulos `s3`, `iam`, `glue_catalog`, `glue_jobs`, `budget`, `dynamodb`).
+- `infra/terraform/` — IaC (root + módulos `s3`, `iam`, `glue_catalog`, `glue_jobs`, `budget`, `dynamodb`, `orchestration`, `monitoring`).
 - Plano detalhado (fora do repo): `C:\Users\Guilherme Ruschel\.claude\plans\olhar-os-mds-na-replicated-lake.md`.
 
 ## Comandos importantes
@@ -203,6 +225,15 @@ $run = aws glue start-job-run --job-name pod99-fin-case-dev-silver-transform --a
 aws dynamodb get-item --table-name pod99-fin-case-dev-batch-control \
   --key '{"id_lote":{"S":"2026-08-01"},"job_name":{"S":"silver"}}' \
   --profile pod99-case --region us-east-2
+
+# Rodar o pipeline inteiro (Bronze -> Silver -> Gold) via Step Functions
+aws stepfunctions start-execution \
+  --state-machine-arn arn:aws:states:us-east-2:952376464712:stateMachine:pod99-fin-case-dev-pipeline \
+  --input '{"processing_date":"2026-08-01"}' \
+  --profile pod99-case --region us-east-2
+
+# Acompanhar a execução
+aws stepfunctions describe-execution --execution-arn <executionArn> --profile pod99-case --region us-east-2 --query "status"
 ```
 
 ## Problemas e soluções
@@ -234,9 +265,10 @@ aws dynamodb get-item --table-name pod99-fin-case-dev-batch-control \
 - Cenário B (Bedrock/MCP/OpenLineage/SDD formal) descartado para esta entrega — foco total no Cenário A.
 - Região mudou de `sa-east-1` (proposta inicial, argumento de residência de dados) para `us-east-2` (decisão prática do usuário, por já ser a conta/região em uso e focar em corte de custo).
 - IAM do deployer definido como `AdministratorAccess` (não policy customizada) para não consumir tempo do prazo de 5 dias úteis ajustando permissões a cada recurso novo.
+- **Não haverá sessão de defesa técnica presencial** — a entrega é só o arquivo ZIP. Criado `APRESENTACAO.md` (documento guia em prosa) e `docs/evidencias/` (prints reais do console AWS, já que a conta não pode ser compartilhada) para compensar a ausência da apresentação ao vivo.
 
 ## Próximo passo
 
-1. Step Functions + EventBridge (orquestração bronze → silver → gold, disparo agendado/por evento) — fecha o Dia 4 do plano.
-2. CloudWatch (métricas customizadas, alarme de falha) — fecha o Dia 4.
-3. Depois (Dia 5): ADRs adicionais, seção de dimensionamento para produção, README final, empacotamento ZIP.
+Case tecnicamente completo. Único item pendente: **commit git** — nunca foi feito nesta sessão (único commit existente é o inicial "Project"). Aguardando decisão explícita do usuário sobre quando/como commitar (protocolo do projeto: nunca commitar/dar push sem confirmação).
+
+Depois do commit: revisar `POD99_Case_delivery.zip` uma última vez, e o case está pronto para entrega (formato final: arquivo ZIP, sem sessão de apresentação/defesa ao vivo).

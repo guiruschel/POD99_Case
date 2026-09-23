@@ -477,6 +477,96 @@ SELECT 'gold_contrato', COUNT(*), COUNT(DISTINCT id_contrato) FROM gold_saldo_co
 
 ---
 
+## Dia 4 (cont.) — Orquestração: Step Functions + EventBridge
+
+Novo módulo Terraform `orchestration`: máquina de estados Step Functions (`pod99-fin-case-dev-pipeline`) com 3 estados sequenciais Bronze → Silver → Gold, usando a integração nativa `arn:aws:states:::glue:startJobRun.sync` (Step Functions faz o polling do job Glue até terminar, sem Lambda de espera). Role IAM escopada só aos 3 ARNs de job. Regra EventBridge de disparo diário criada **`DISABLED`** de propósito (decisão documentada: calcular "ontem" dinamicamente precisaria de Lambda/Scheduler, fora do escopo, e deixar habilitado disparava sem supervisão pelo resto do projeto).
+
+### 4.12 `terraform plan`/`apply`
+**Resultado:** `Plan: 7 to add, 0 to change, 0 to destroy` → `Apply complete! Resources: 7 added, 0 changed, 0 destroyed.`
+
+### 4.13 Primeira execução real — FAILED (achado real de ASL)
+```bash
+aws stepfunctions start-execution --state-machine-arn arn:aws:states:...:stateMachine:pod99-fin-case-dev-pipeline --input '{"processing_date":"2026-08-01"}' ...
+```
+**Resultado:** `RunBronze` completou (`SUCCEEDED`), mas a execução inteira terminou em `FAILED`.
+**Erro** (via `aws stepfunctions get-execution-history`):
+```
+States.Runtime: The JSONPath '$.processing_date' specified for the field '--processing_date.$'
+could not be found in the input '{"AllocatedCapacity":2,...,"JobName":"pod99-fin-case-dev-bronze-ingest",...}'
+```
+**Causa raiz:** por padrão, o output de uma `Task` do Step Functions **substitui** o input inteiro do estado seguinte. O output do `RunBronze` (o objeto de resultado do job run do Glue) sobrescreveu `$`, apagando o `processing_date` que veio no input original da execução — então o `RunSilver`, que referenciava `$.processing_date`, não achou nada.
+**Correção:** adicionado `ResultPath = null` em `RunBronze` e `RunSilver` (`infra/terraform/modules/orchestration/main.tf`) — descarta o resultado da task Glue e preserva o input original intacto para os próximos estados.
+
+### 4.14 `terraform apply` da correção
+**Resultado:** `Plan: 0 to add, 2 to change, 0 to destroy` → `Apply complete!` (só a definição da máquina de estados mudou).
+
+### 4.15 Segunda execução real — SUCCEEDED ponta a ponta
+```bash
+aws stepfunctions start-execution --state-machine-arn arn:aws:states:...:stateMachine:pod99-fin-case-dev-pipeline --input '{"processing_date":"2026-08-01"}' ...
+```
+**Resultado:** `status: SUCCEEDED`, duração total **5min48s** (`startDate` → `stopDate`), Bronze + Silver + Gold rodando em sequência de verdade, sem intervenção manual entre eles.
+
+**Verificação real via Athena** (não só o status da execução):
+```sql
+SELECT 'bronze', COUNT(*), COUNT(DISTINCT id_transacao) FROM bronze_fin_contabilidade_saldo_contrato
+UNION ALL SELECT 'silver', COUNT(*), COUNT(DISTINCT id_transacao) FROM silver_fin_contabilidade_saldo_contrato
+UNION ALL SELECT 'gold_contrato', COUNT(*), COUNT(DISTINCT id_contrato) FROM gold_saldo_contrato WHERE dt_processamento = DATE '2026-08-01'
+```
+**Resultado:** `bronze: 4873/4873`, `silver: 4873/4873`, `gold_contrato: 1044/1044` — idêntico a todas as execuções anteriores das 3 camadas rodadas manualmente, confirmando que a orquestração não introduziu nenhuma divergência de dado. Batch control confirmado: `aws dynamodb get-item ... job_name=gold` → `status=PROCESSED`.
+
+**Custo real desta seção:** Step Functions cobra por transição de estado (poucos centavos de dólar por milhão — 3 transições aqui é irrisório) + as 3 execuções de job Glue já contabilizadas no padrão de custo anterior.
+
+---
+
+## Dia 4 (cont.) — CloudWatch: métricas customizadas e alarme de falha
+
+`jobs/common/metrics.py` — `put_metric()`, mesmo padrão opcional do `batch_control.py` (no-op sem `--cloudwatch_namespace`, não quebra os runs locais). Chamado nos 3 jobs: `records_processed` (Bronze/Silver/Gold), `records_rejected_dq` (só Bronze, contagem de rejeições de DQ), `job_duration_seconds` (os 3, medido em volta do `try/except` principal).
+
+Módulo Terraform `monitoring`: tópico SNS (`pod99-fin-case-dev-pipeline-alerts`) com inscrição por e-mail, alimentado por dois caminhos nativos:
+1. Regra EventBridge em cima de eventos "Glue Job State Change" (emitidos automaticamente pelo Glue) para os 3 jobs, filtrando `state IN (FAILED, TIMEOUT, ERROR)`.
+2. Alarme CloudWatch na métrica nativa `AWS/States ExecutionsFailed`, dimensionado pelo ARN da máquina de estados — não precisa de instrumentação customizada, é publicada automaticamente pelo Step Functions.
+
+IAM: `cloudwatch:PutMetricData` adicionado à role dos jobs (não escopável por recurso — `PutMetricData` não tem formato de ARN, então `resources = ["*"]` é o máximo de least-privilege possível para essa action específica).
+
+### 4.16 Testes unitários (`pytest`, dentro do Docker)
+```
+bash scripts/run_tests_docker.sh
+```
+**Resultado:** `27 passed in 37.84s` — 25 anteriores + 2 novos de `test_metrics.py` (no-op sem namespace configurado, publica corretamente quando configurado — mock de `boto3.client`).
+
+### 4.17 `terraform plan`/`apply`
+**Resultado:** `Plan: 7 to add, 7 to change, 0 to destroy` → `Apply complete! Resources: 7 added, 7 changed, 0 destroyed.` (tópico SNS + policy + assinatura de e-mail + regra EventBridge + target + alarme CloudWatch + policy IAM novos; os 3 jobs Glue atualizados com `--cloudwatch_namespace`).
+
+**Nota:** a assinatura de e-mail do SNS fica `PendingConfirmation` até o destinatário clicar no link de confirmação enviado pela AWS — sem isso, alertas reais não chegam (comportamento padrão do SNS, não um bug).
+
+### 4.18 Execução real via Step Functions com métricas habilitadas
+```bash
+aws stepfunctions start-execution --state-machine-arn ...:stateMachine:pod99-fin-case-dev-pipeline --input '{"processing_date":"2026-08-01"}' ...
+```
+**Resultado:** `status: SUCCEEDED`.
+
+**Verificação real das métricas publicadas:**
+```bash
+aws cloudwatch list-metrics --namespace Pod99FinCase ...
+```
+**Resultado:** 7 métricas presentes — `records_processed`/`records_rejected_dq`/`job_duration_seconds` (bronze), `records_processed`/`job_duration_seconds` (silver), `records_processed`/`job_duration_seconds` (gold).
+
+**Verificação de um valor real:**
+```bash
+aws cloudwatch get-metric-statistics --namespace Pod99FinCase --metric-name records_processed --dimensions Name=JobName,Value=bronze --period 3600 --statistics Maximum ...
+```
+**Resultado:** `4873.0` — idêntico ao `valid` do log `validation_complete` do Bronze e ao total real da tabela. Confirma que a métrica publicada não é só um contador arbitrário, reflete o dado real processado.
+
+### 4.19 Verificação do alarme
+```bash
+aws cloudwatch describe-alarms --alarm-names pod99-fin-case-dev-pipeline-execution-failed ...
+```
+**Resultado:** `State: OK`, `Reason: "... 0.0 ... was not greater than or equal to the threshold (1.0)"` — alarme corretamente em estado normal após uma execução bem-sucedida (nenhuma falha registrada na métrica `ExecutionsFailed`).
+
+**Custo real desta seção:** SNS/EventBridge/CloudWatch Alarms — todos com tier sempre-grátis cobrindo esse volume; $0 adicional.
+
+---
+
 ## Ambiente / infraestrutura de suporte (achados ao longo do processo)
 
 | Problema encontrado | Diagnóstico | Correção |

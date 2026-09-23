@@ -1,5 +1,6 @@
 """Bronze job: ingest raw Parquet, validate against the data contract, write Iceberg (valid) + quarantine (rejected)."""
 import sys
+import time
 
 from awsglue.context import GlueContext
 from awsglue.job import Job
@@ -10,6 +11,7 @@ from common.batch_control import get_optional_arg, update_batch_status
 from common.contract import load_contract
 from common.dq_validation import validate_dataframe
 from common.logging_utils import get_logger, log_event
+from common.metrics import put_metric
 
 JOB_ARGS = [
     "JOB_NAME",
@@ -40,13 +42,12 @@ def run_bronze_ingest(spark, args: dict, logger) -> None:
     valid_df.cache()
     rejected_df.cache()
 
-    log_event(
-        logger,
-        "validation_complete",
-        total=raw_df.count(),
-        valid=valid_df.count(),
-        rejected=rejected_df.count(),
-    )
+    total_count = raw_df.count()
+    valid_count = valid_df.count()
+    rejected_count = rejected_df.count()
+    log_event(logger, "validation_complete", total=total_count, valid=valid_count, rejected=rejected_count)
+    put_metric("records_processed", valid_count, "bronze", logger=logger)
+    put_metric("records_rejected_dq", rejected_count, "bronze", logger=logger)
 
     # The database/namespace is provisioned by Terraform (infra/terraform/modules/glue_catalog),
     # not by this job -- "CREATE NAMESPACE" here was redundant and, against the
@@ -111,10 +112,12 @@ def main() -> None:
     job = Job(glue_context)
     job.init(args["JOB_NAME"], args)
 
+    started_at = time.time()
     try:
         update_batch_status(id_lote, "bronze", "PROCESSING", logger)
         run_bronze_ingest(spark, args, logger)
         update_batch_status(id_lote, "bronze", "PROCESSED", logger)
+        put_metric("job_duration_seconds", time.time() - started_at, "bronze", unit="Seconds", logger=logger)
         job.commit()
     except Exception as e:
         update_batch_status(id_lote, "bronze", "FAILED", logger, error_message=str(e)[:500])

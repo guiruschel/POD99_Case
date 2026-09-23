@@ -28,6 +28,16 @@ output "gold_job_name" {
   value       = module.glue_jobs.gold_job_name
 }
 
+output "state_machine_name" {
+  description = "Name of the Step Functions pipeline (Bronze -> Silver -> Gold)"
+  value       = module.orchestration.state_machine_name
+}
+
+output "pipeline_alerts_topic_arn" {
+  description = "SNS topic that receives Glue job / Step Functions pipeline failure alerts"
+  value       = module.monitoring.sns_topic_arn
+}
+
 output "budget_name" {
   description = "AWS Budgets cost guard for this project"
   value       = module.budget.budget_name

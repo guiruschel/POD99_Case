@@ -53,6 +53,10 @@ data "archive_file" "common_zip" {
     content  = file("${local.repo_root}/jobs/common/gold_transform.py")
     filename = "common/gold_transform.py"
   }
+  source {
+    content  = file("${local.repo_root}/jobs/common/metrics.py")
+    filename = "common/metrics.py"
+  }
 }
 
 resource "aws_s3_object" "bronze_script" {
@@ -131,6 +135,7 @@ resource "aws_glue_job" "bronze_ingest" {
     "--table_location"                   = "s3://${var.data_lake_bucket_name}/bronze/fin_contabilidade_saldo_contrato/"
     "--batch_control_table"              = var.batch_control_table
     "--job_name_tag"                     = "bronze"
+    "--cloudwatch_namespace"             = var.cloudwatch_namespace
   }
 }
 
@@ -168,6 +173,7 @@ resource "aws_glue_job" "silver_transform" {
     "--processing_date"                  = "1970-01-01"
     "--batch_control_table"              = var.batch_control_table
     "--job_name_tag"                     = "silver"
+    "--cloudwatch_namespace"             = var.cloudwatch_namespace
   }
 }
 
@@ -206,5 +212,6 @@ resource "aws_glue_job" "gold_aggregate" {
     "--processing_date"                  = "1970-01-01"
     "--batch_control_table"              = var.batch_control_table
     "--job_name_tag"                     = "gold"
+    "--cloudwatch_namespace"             = var.cloudwatch_namespace
   }
 }
